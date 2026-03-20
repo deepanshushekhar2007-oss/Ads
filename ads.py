@@ -16,8 +16,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+# ---------------- TELETHON CLIENT ---------------- #
+bot = TelegramClient("bot", API_ID, API_HASH)
 
+# ---------------- MONGODB ---------------- #
 mongo = AsyncIOMotorClient(MONGO_URL)
 db = mongo["ads_bot"]
 col = db["users"]
@@ -73,17 +75,6 @@ def menu(d):
         [Button.inline("🚪 Logout", b"logout")]
     ]
 
-# ================= START ================= #
-
-@bot.on(events.NewMessage(pattern="/start"))
-async def start(e):
-    uid = e.sender_id
-    d = await get_user(uid)
-    if d.get("is_banned"):
-        return await e.reply("🚫 You are banned from using this bot")
-    txt, btn = menu(d)
-    await e.respond(txt, buttons=btn)
-
 # ================= PROFILE NAME ================= #
 
 async def set_name(client):
@@ -94,6 +85,17 @@ async def set_name(client):
             first_name=(me.first_name or "") + tag,
             last_name=me.last_name or ""
         ))
+
+# ================= START ================= #
+
+@bot.on(events.NewMessage(pattern="/start"))
+async def start(e):
+    uid = e.sender_id
+    d = await get_user(uid)
+    if d.get("is_banned"):
+        return await e.reply("🚫 You are banned from using this bot")
+    txt, btn = menu(d)
+    await e.respond(txt, buttons=btn)
 
 # ================= CALLBACK ================= #
 
@@ -283,7 +285,11 @@ async def loop_ads(uid):
         await bot.send_message(uid, f"✅ Round {d['round']} done")
     await client.disconnect()
 
-# ================= RUN ================= #
+# ================= MAIN RUN ================= #
 
-print("🚀 Bot running...")
-bot.run_until_disconnected()
+async def main():
+    await bot.start(bot_token=BOT_TOKEN)
+    print("🚀 Bot is running on Render...")
+    await bot.run_until_disconnected()
+
+asyncio.run(main())
