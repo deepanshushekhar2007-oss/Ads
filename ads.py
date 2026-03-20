@@ -16,10 +16,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-# ---------------- TELETHON CLIENT ---------------- #
 bot = TelegramClient("bot", API_ID, API_HASH)
 
-# ---------------- MONGODB ---------------- #
 mongo = AsyncIOMotorClient(MONGO_URL)
 db = mongo["ads_bot"]
 col = db["users"]
@@ -35,7 +33,7 @@ async def get_user(uid):
     if not data:
         data = {
             "_id": uid,
-            "messages": [],
+            "message": None,
             "groups": [],
             "selected": [],
             "target_mode": "All",
@@ -55,25 +53,25 @@ async def update_user(uid, data):
 # ================= MENU ================= #
 
 def menu(d):
-    return f"""
+    txt = f"""
 🚀 ADS PANEL
 
 👤 Account: {"Connected" if d.get("session") else "Not Connected"}
 📊 Status: {"Running" if d.get("running") else "Stopped"}
 
 ⚙️
-• Msg: {len(d.get("messages", []))}
-• Target: {d.get("target_mode")}
+• Msg: {d.get("message") if d.get("message") else 'None'}
+• Target Mode: {d.get("target_mode")}
 • Delay: {d.get("delay")} sec
-""", [
-        [Button.inline("➕ Add Account", b"add")],
-        [Button.inline("✉️ Message", b"msg")],
-        [Button.inline("🎯 Target", b"target")],
-        [Button.inline("⏱️ Time", b"time")],
+"""
+    # 2 buttons per row
+    buttons = [
+        [Button.inline("➕ Add Account", b"add"), Button.inline("✉️ Message", b"msg")],
+        [Button.inline("🎯 Target", b"target"), Button.inline("⏱️ Time", b"time")],
         [Button.inline("▶️ Start", b"start"), Button.inline("⏹️ Stop", b"stop")],
-        [Button.inline("⚙️ Settings", b"settings")],
-        [Button.inline("🚪 Logout", b"logout")]
+        [Button.inline("⚙️ Settings", b"settings"), Button.inline("🚪 Logout", b"logout")]
     ]
+    return txt, buttons
 
 # ================= PROFILE NAME ================= #
 
@@ -107,57 +105,104 @@ async def cb(e):
         return await e.answer("🚫 You are banned")
     data = e.data
 
-    # NORMAL USER PANEL
+    # --- NORMAL USER ---
     if data == b"add":
         user_state[uid] = "phone"
         await e.edit("📱 Send phone number (+91...)")
+
     elif data == b"msg":
+        # show sub-menu for message
+        buttons = [
+            [Button.inline("Set Message", b"set_msg"), Button.inline("View Message", b"view_msg")],
+            [Button.inline("Back", b"back")]
+        ]
+        await e.edit("✉️ Message Menu", buttons=buttons)
+
+    elif data == b"set_msg":
         user_state[uid] = "msg"
-        await e.edit("Send messages (/done to finish)")
+        await e.edit("✉️ Send your message (only 1 message)")
+
+    elif data == b"view_msg":
+        msg = d.get("message")
+        await e.answer(f"📄 Your message:\n{msg}" if msg else "⚠️ No message set")
+
     elif data == b"time":
         user_state[uid] = "time"
-        await e.edit("Send delay in seconds (default 120)")
+        await e.edit("⏱️ Send delay in seconds (default 120)")
+
     elif data == b"start":
         if not d.get("session"):
             return await e.answer("Add account first")
-        if not d.get("messages"):
-            return await e.answer("Add messages first")
+        if not d.get("message"):
+            return await e.answer("Set your message first")
         d["running"] = True
         await update_user(uid, d)
         asyncio.create_task(loop_ads(uid))
-        await e.answer("Ads Started 🚀")
+        await e.answer("🚀 Ads Started")
+        await e.respond("✅ Your Ads Started!")
+
     elif data == b"stop":
         d["running"] = False
         await update_user(uid, d)
-        await e.answer("Ads Stopped 🛑")
+        await e.answer("🛑 Ads Stopped")
+
     elif data == b"logout":
-        await col.delete_one({"_id": uid})
-        await e.edit("Logged out successfully")
+        try:
+            temp_client.pop(uid, None)
+            await col.delete_one({"_id": uid})
+        except Exception as ex:
+            await e.answer(f"⚠️ Error: {ex}")
+        await e.edit("🚪 Logged out successfully")
+
     elif data == b"back":
         txt, btn = menu(d)
         await e.edit(txt, buttons=btn)
 
-    # ADMIN PANEL
-    if uid == ADMIN_ID:
-        if data == b"broadcast":
-            admin_state["mode"] = "broadcast"
-            await e.edit("📢 Send message to broadcast")
-        elif data == b"user_info":
-            admin_state["mode"] = "info"
-            await e.edit("Send user ID")
-        elif data == b"ban":
-            admin_state["mode"] = "ban"
-            await e.edit("Send user ID to ban")
-        elif data == b"unban":
-            admin_state["mode"] = "unban"
-            await e.edit("Send user ID to unban")
+    # --- TARGET BUTTON ---
+    elif data == b"target":
+        txt = "🎯 Choose Target Mode"
+        btns = [
+            [Button.inline("All Groups", b"target_all"), Button.inline("Manual Select", b"target_manual")],
+            [Button.inline("Back", b"back")]
+        ]
+        await e.edit(txt, buttons=btns)
+
+    elif data == b"target_all":
+        d["target_mode"] = "All"
+        d["selected"] = [str(g["id"]) for g in d.get("groups", [])]
+        await update_user(uid, d)
+        await e.answer("✅ Target set to All Groups")
+
+    elif data == b"target_manual":
+        d["target_mode"] = "Manual"
+        await update_user(uid, d)
+        buttons = []
+        for g in d.get("groups", []):
+            sel = "✅" if str(g["id"]) in d.get("selected", []) else "❌"
+            buttons.append([Button.inline(f"{sel} {g['title']}", f"group_{g['id']}")])
+        buttons.append([Button.inline("Back", b"back")])
+        await e.edit("Tap to select/deselect groups:", buttons=buttons)
+
+    elif data.startswith(b"group_"):
+        gid = data.decode().split("_")[1]
+        if gid in d.get("selected", []):
+            d["selected"].remove(gid)
+        else:
+            d["selected"].append(gid)
+        await update_user(uid, d)
+        # refresh manual selection buttons
+        buttons = []
+        for g in d.get("groups", []):
+            sel = "✅" if str(g["id"]) in d.get("selected", []) else "❌"
+            buttons.append([Button.inline(f"{sel} {g['title']}", f"group_{g['id']}")])
+        buttons.append([Button.inline("Back", b"back")])
+        await e.edit("Tap to select/deselect groups:", buttons=buttons)
 
 # ================= MESSAGE HANDLER ================= #
 
 @bot.on(events.NewMessage)
 async def handler(e):
     uid = e.sender_id
-    # NORMAL USER
     if uid in user_state:
         state = user_state[uid]
         d = await get_user(uid)
@@ -187,12 +232,10 @@ async def handler(e):
             await login_done(e, uid, client)
 
         elif state == "msg":
-            if e.text == "/done":
-                user_state.pop(uid)
-                return await e.reply("✅ Messages saved")
-            d["messages"].append(e.text)
+            d["message"] = e.text
             await update_user(uid, d)
-            await e.reply("Added ✅")
+            user_state.pop(uid)
+            await e.reply("✉️ Message saved ✅")
 
         elif state == "time":
             try:
@@ -203,47 +246,6 @@ async def handler(e):
             user_state.pop(uid)
             await e.reply(f"⏱️ Delay set to {d['delay']} sec")
 
-    # ADMIN
-    elif uid == ADMIN_ID and "mode" in admin_state:
-        mode = admin_state["mode"]
-        if mode == "broadcast":
-            users = col.find({})
-            count = 0
-            async for u in users:
-                try:
-                    await bot.send_message(u["_id"], e.text)
-                    count += 1
-                except:
-                    pass
-            await e.reply(f"✅ Broadcast sent to {count} users")
-            admin_state.clear()
-        elif mode == "info":
-            uid2 = int(e.text)
-            user = await col.find_one({"_id": uid2})
-            if not user:
-                return await e.reply("User not found")
-            txt = f"""
-👤 USER INFO
-ID: {uid2}
-📱 Phone: {user.get("phone")}
-📊 Msg: {len(user.get("messages", []))}
-🎯 Target: {user.get("target_mode")}
-⏱️ Delay: {user.get("delay")}
-🚀 Running: {user.get("running")}
-"""
-            await e.reply(txt)
-            admin_state.clear()
-        elif mode == "ban":
-            uid2 = int(e.text)
-            await col.update_one({"_id": uid2}, {"$set": {"is_banned": True}})
-            await e.reply("🚫 User banned")
-            admin_state.clear()
-        elif mode == "unban":
-            uid2 = int(e.text)
-            await col.update_one({"_id": uid2}, {"$set": {"is_banned": False}})
-            await e.reply("✅ User unbanned")
-            admin_state.clear()
-
 # ================= LOGIN DONE ================= #
 
 async def login_done(e, uid, client):
@@ -253,7 +255,7 @@ async def login_done(e, uid, client):
     dialogs = await client.get_dialogs()
     groups = [x.entity for x in dialogs if x.is_group]
     d["groups"] = [{"id": g.id, "title": g.title} for g in groups]
-    d["selected"] = [str(g.id) for g in groups]
+    d["selected"] = [str(g["id"]) for g in groups]
     await update_user(uid, d)
     await client.disconnect()
     user_state.pop(uid)
@@ -265,31 +267,51 @@ async def loop_ads(uid):
     d = await get_user(uid)
     if not d.get("session"):
         return
+
     client = TelegramClient(StringSession(d["session"]), API_ID, API_HASH)
     await client.start()
+
+    # refresh dialogs for latest groups
+    dialogs = await client.get_dialogs()
+    groups = [x.entity for x in dialogs if x.is_group]
+    d["groups"] = [{"id": g.id, "title": g.title} for g in groups]
+    if d["target_mode"] == "All":
+        d["selected"] = [str(g["id"]) for g in d["groups"]]
+    await update_user(uid, d)
+
     while d["running"]:
-        groups = d["groups"]
-        for g in groups:
+        d = await get_user(uid)
+        msg = d.get("message")
+        if not msg:
+            await bot.send_message(uid, "⚠️ Message not set, stopping ads.")
+            d["running"] = False
+            await update_user(uid, d)
+            break
+
+        selected_groups = [g for g in d["groups"] if str(g["id"]) in d.get("selected", [])]
+
+        for g in selected_groups:
             if not d["running"]:
                 break
-            msg = random.choice(d["messages"])
             try:
                 await client.send_message(g["id"], msg)
             except FloodWaitError as e:
                 await asyncio.sleep(e.seconds)
             except Exception as ex:
-                print(ex)
-            await asyncio.sleep(random.randint(60, 180))  # Anti-ban random delay
+                await bot.send_message(uid, f"⚠️ Could not send to {g['title']}: {ex}")
+            await asyncio.sleep(d.get("delay", 120))
+
         d["round"] += 1
         await update_user(uid, d)
         await bot.send_message(uid, f"✅ Round {d['round']} done")
+
     await client.disconnect()
 
 # ================= MAIN RUN ================= #
 
 async def main():
     await bot.start(bot_token=BOT_TOKEN)
-    print("🚀 Bot is running on Render...")
+    print("🚀 Bot running on Render...")
     await bot.run_until_disconnected()
 
 asyncio.run(main())
