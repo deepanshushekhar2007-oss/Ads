@@ -1,4 +1,5 @@
 import os
+import time
 import asyncio
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
@@ -6,6 +7,7 @@ from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from threading import Thread
 
+# ------------------ Bot setup ------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # Set this in Render environment
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
@@ -13,17 +15,17 @@ dp = Dispatcher(bot)
 state = {}
 data = {}
 
-# ---------- Render keep-alive ----------
+# ------------------ Render keep-alive ------------------
 async def handle(request):
     return web.Response(text="Bot is running ✅")
 
 def start_web():
+    port = int(os.environ.get("PORT", 10000))
     app = web.Application()
     app.router.add_get("/", handle)
-    port = int(os.environ.get("PORT", 10000))
     web.run_app(app, port=port)
 
-# ---------- Telegram menu ----------
+# ------------------ Telegram menu ------------------
 def menu():
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
@@ -35,35 +37,36 @@ def menu():
     return kb
 
 @dp.message_handler(commands=['start'])
-async def start(msg: types.Message):
+async def start_msg(msg: types.Message):
     await msg.reply(
         "🤖 WhatsApp Automation Panel\n\n"
         "Select an option from the menu below:",
         reply_markup=menu()
     )
 
-# ---------- Button callbacks ----------
+# ------------------ Button callbacks ------------------
 @dp.callback_query_handler(lambda c: True)
 async def cb(call: types.CallbackQuery):
     uid = call.from_user.id
 
     if call.data == "connect":
-        # Run Node.js WhatsApp bot
+        # Start Node.js WhatsApp bot
         os.system("node wa.js &")
         await call.message.edit_text(
             "🔹 Generating WhatsApp QR code...\n"
-            "⚠️ You have 30 seconds to scan the QR code before it expires."
+            "⚠️ Scan the QR within 30 seconds before it expires!"
         )
 
-        # Async polling QR & connected status
+        # Poll for QR image
         for _ in range(30):
             if os.path.exists("qr.png"):
                 await bot.send_photo(uid, open("qr.png", "rb"),
-                                     caption="📷 Scan this QR with WhatsApp within 30 seconds!")
+                                     caption="📲 Scan this QR with WhatsApp in 30s!")
                 os.remove("qr.png")
                 break
             await asyncio.sleep(1)
 
+        # Poll for WhatsApp connection
         for _ in range(30):
             if os.path.exists("wa_connected.flag"):
                 await bot.send_message(uid, "✅ WhatsApp connected successfully!")
@@ -73,7 +76,7 @@ async def cb(call: types.CallbackQuery):
 
     elif call.data == "bulk":
         state[uid] = "COUNT"
-        await call.message.edit_text("Enter the number of groups to create:")
+        await call.message.edit_text("Enter number of groups to create:")
 
     elif call.data == "join":
         state[uid] = "JOIN"
@@ -81,9 +84,9 @@ async def cb(call: types.CallbackQuery):
 
     elif call.data == "vcf":
         state[uid] = "VCF_FILE"
-        await call.message.edit_text("Upload your VCF file containing participants:")
+        await call.message.edit_text("Upload VCF file containing participants:")
 
-# ---------- Text messages ----------
+# ------------------ Text messages ------------------
 @dp.message_handler(content_types=['text'])
 async def text(msg: types.Message):
     uid = msg.from_user.id
@@ -91,11 +94,7 @@ async def text(msg: types.Message):
         return
 
     if state[uid] == "COUNT":
-        try:
-            data[uid] = {"count": int(msg.text)}
-        except ValueError:
-            await msg.reply("❌ Please enter a valid number.")
-            return
+        data[uid] = {"count": int(msg.text)}
         state[uid] = "NAME"
         await msg.reply("Enter base group name:")
 
@@ -127,7 +126,7 @@ async def text(msg: types.Message):
         await msg.reply("Adding members from VCF...")
         state.pop(uid)
 
-# ---------- Photo handler ----------
+# ------------------ Photo handler ------------------
 @dp.message_handler(content_types=['photo'])
 async def photo(msg: types.Message):
     uid = msg.from_user.id
@@ -138,7 +137,7 @@ async def photo(msg: types.Message):
     await msg.reply("Creating groups...")
     state.pop(uid)
 
-# ---------- Document handler (VCF) ----------
+# ------------------ Document handler (VCF) ------------------
 @dp.message_handler(content_types=['document'])
 async def doc(msg: types.Message):
     uid = msg.from_user.id
@@ -148,7 +147,10 @@ async def doc(msg: types.Message):
     state[uid] = "VCF_LINK"
     await msg.reply("Send the WhatsApp group invite link to add members:")
 
-# ---------- Start ----------
+# ------------------ Main ------------------
 if __name__ == "__main__":
+    # Start Render web server in background
     Thread(target=start_web, daemon=True).start()
+
+    # Start Telegram bot (single instance polling)
     executor.start_polling(dp, skip_updates=True)
