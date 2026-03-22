@@ -1,9 +1,12 @@
-import os, time, json
+import os
+import time
+import asyncio
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from threading import Thread
+import subprocess
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=BOT_TOKEN)
@@ -11,18 +14,22 @@ dp = Dispatcher(bot)
 
 state = {}
 data = {}
-user_whatsapp = {}
-whatsapp_running = False
+user_whatsapp = {}  # track which user has connected which WA number
 
 # ---------- Render keep-alive ----------
 async def handle(request):
-    return web.Response(text="Bot is running ✅")
+    return web.Response(text="🤖 WhatsApp Automation Bot Running ✅")
 
 def start_web():
     app = web.Application()
     app.router.add_get("/", handle)
     port = int(os.environ.get("PORT", 10000))
     web.run_app(app, port=port)
+
+# ---------- Check if wa.js is running ----------
+def is_wa_running():
+    result = subprocess.run(["pgrep", "-f", "node wa.js"], capture_output=True, text=True)
+    return bool(result.stdout.strip())
 
 # ---------- Telegram menu ----------
 def menu(uid=None):
@@ -37,45 +44,59 @@ def menu(uid=None):
         kb.add(InlineKeyboardButton("🔒 Logout WhatsApp", callback_data="logout"))
     return kb
 
-# ---------- /start ----------
+# ---------- Start command ----------
 @dp.message_handler(commands=['start'])
 async def start_msg(msg: types.Message):
     uid = msg.from_user.id
-    status = f"✅ Connected: {user_whatsapp[uid]}" if uid in user_whatsapp else "❌ Not connected"
-    await msg.reply(f"🤖 WhatsApp Automation Panel\nStatus: {status}\nSelect an option:", reply_markup=menu(uid))
+    status_text = "❌ Not connected"
+    if uid in user_whatsapp:
+        status_text = f"✅ Connected: {user_whatsapp[uid]}"
+    await msg.reply(
+        f"🤖 WhatsApp Automation Panel\n\n"
+        f"Status: {status_text}\n"
+        f"Select an option from the menu below:",
+        reply_markup=menu(uid)
+    )
 
 # ---------- Button callbacks ----------
 @dp.callback_query_handler(lambda c: True)
 async def cb(call: types.CallbackQuery):
-    global whatsapp_running
     uid = call.from_user.id
 
     # ---------- WhatsApp connect ----------
     if call.data == "connect":
-        if whatsapp_running:
-            await call.message.reply("✅ WhatsApp bot already running!")
+        if os.path.exists("wa_connected.flag") or is_wa_running():
+            number = "unknown"
+            if os.path.exists("wa_connected.flag"):
+                with open("wa_connected.flag") as f:
+                    number = f.read().strip()
+                user_whatsapp[uid] = number
+            await call.message.reply(f"✅ WhatsApp already connected: {number}")
             return
-        if uid in user_whatsapp:
-            await call.message.reply(f"✅ WhatsApp already connected: {user_whatsapp[uid]}")
-            return
-        os.system("node wa.js &")
-        whatsapp_running = True
-        await call.message.edit_text("🔹 Generating WhatsApp QR code...\n⚠️ You have 30s to scan the QR!")
+
+        # Start WhatsApp bot
+        subprocess.Popen(["node", "wa.js"])
+        await call.message.edit_text(
+            "🔹 Generating WhatsApp QR code...\n"
+            "⚠️ You have 30 seconds to scan the QR code before it expires."
+        )
 
         # Poll QR
         for _ in range(30):
             if os.path.exists("qr.png"):
-                await bot.send_photo(uid, open("qr.png", "rb"), caption="Scan this QR within 30s")
+                await bot.send_photo(uid, open("qr.png", "rb"),
+                                     caption="Scan this QR with WhatsApp within 30 seconds!")
                 os.remove("qr.png")
                 break
             time.sleep(1)
 
-        # Poll connection
+        # Poll connection flag
         for _ in range(30):
             if os.path.exists("wa_connected.flag"):
                 with open("wa_connected.flag") as f:
-                    user_whatsapp[uid] = f.read().strip()
-                await bot.send_message(uid, f"✅ WhatsApp connected: {user_whatsapp[uid]}")
+                    number = f.read().strip()
+                    user_whatsapp[uid] = number
+                await bot.send_message(uid, f"✅ WhatsApp connected: {number}")
                 os.remove("wa_connected.flag")
                 break
             time.sleep(1)
@@ -83,19 +104,20 @@ async def cb(call: types.CallbackQuery):
     # ---------- Logout WhatsApp ----------
     elif call.data == "logout":
         if uid in user_whatsapp:
-            os.system("node logout.js")
+            # Kill running wa.js process
+            subprocess.run(["pkill", "-f", "node wa.js"])
             await bot.send_message(uid, f"🔓 WhatsApp logged out: {user_whatsapp[uid]}")
             del user_whatsapp[uid]
         else:
             await bot.send_message(uid, "❌ No WhatsApp connected")
 
-    # ---------- Bulk group creator ----------
+    # ---------- Bulk group creation ----------
     elif call.data == "bulk":
         if uid not in user_whatsapp:
             await call.message.reply("❌ Connect WhatsApp first!")
             return
         state[uid] = "COUNT"
-        await call.message.edit_text("Enter number of groups to create:")
+        await call.message.edit_text("Enter the number of groups to create:")
 
     # ---------- Join via link ----------
     elif call.data == "join":
@@ -112,49 +134,6 @@ async def cb(call: types.CallbackQuery):
             return
         state[uid] = "VCF_FILE"
         await call.message.edit_text("Upload your VCF file containing participants:")
-
-    # ---------- Description Yes/No ----------
-    elif call.data in ["desc_yes", "desc_no"]:
-        if call.data == "desc_no":
-            data[uid]["desc"] = ""
-            state[uid] = "DP_OPTION"
-        else:
-            state[uid] = "DESC"
-        # Ask for DP
-        kb = InlineKeyboardMarkup(row_width=2)
-        kb.add(InlineKeyboardButton("Yes", callback_data="dp_yes"), InlineKeyboardButton("No", callback_data="dp_no"))
-        await call.message.reply("Do you want to add Group DP?", reply_markup=kb)
-
-    # ---------- DP Yes/No ----------
-    elif call.data in ["dp_yes", "dp_no"]:
-        data[uid]["dp"] = True if call.data == "dp_yes" else False
-        # Ask for group settings
-        state[uid] = "SETTINGS"
-        kb = InlineKeyboardMarkup(row_width=2)
-        kb.add(
-            InlineKeyboardButton("Restrict Messages", callback_data="restrict_msg"),
-            InlineKeyboardButton("Restrict Invites", callback_data="restrict_invite"),
-            InlineKeyboardButton("Restrict Admin Only", callback_data="restrict_admin"),
-            InlineKeyboardButton("Restrict Media", callback_data="restrict_media"),
-            InlineKeyboardButton("✅ Save & Create Groups", callback_data="save_groups")
-        )
-        await call.message.reply("Select group settings toggles:", reply_markup=kb)
-
-    # ---------- Toggle settings ----------
-    elif call.data.startswith("restrict_"):
-        key = call.data.replace("restrict_", "")
-        data[uid].setdefault("settings", {})[key] = not data[uid].get("settings", {}).get(key, False)
-        await call.answer(f"{key} set to {data[uid]['settings'][key]}")
-
-    # ---------- Save & Create Groups ----------
-    elif call.data == "save_groups":
-        # Save group_data.json for wa.js to read
-        with open("group_data.json", "w") as f:
-            json.dump(data[uid], f)
-        await call.message.reply("✅ Group creation started...")
-        os.system("node create.js")
-        state.pop(uid)
-        data.pop(uid)
 
 # ---------- Start ----------
 if __name__ == "__main__":
