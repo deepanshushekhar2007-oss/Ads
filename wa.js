@@ -5,13 +5,13 @@ import qrcode from 'qrcode';
 
 async function start() {
     try {
-        // Fetch latest WA Web version
+        // 1️⃣ Fetch latest WhatsApp Web version
         const { version } = await fetchLatestBaileysVersion();
 
-        // Auth state
+        // 2️⃣ Use multi-file auth state (create 'auth' folder automatically)
         const { state, saveCreds } = await useMultiFileAuthState('auth');
 
-        // Create socket
+        // 3️⃣ Create WhatsApp socket
         const sock = makeWASocket({
             logger: P({ level: 'silent' }),
             auth: state,
@@ -19,40 +19,40 @@ async function start() {
             printQRInTerminal: false
         });
 
-        // Save creds on update
+        // Save credentials on update
         sock.ev.on('creds.update', saveCreds);
 
-        // Connection updates
+        // 4️⃣ Listen for connection updates
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
 
-            // 1️⃣ QR code event
+            // 🔹 QR code received
             if (qr) {
                 const qrDataUrl = await qrcode.toDataURL(qr);
 
-                // Save as base64 text for Telegram bot
                 console.log("QR_BASE64_START");
                 console.log(qrDataUrl);
                 console.log("QR_BASE64_END");
 
-                // Also save as image for preview
+                // Save QR as PNG image for Telegram preview
                 const base64Data = qrDataUrl.replace(/^data:image\/png;base64,/, "");
                 fs.writeFileSync("qr.png", base64Data, "base64");
             }
 
-            // 2️⃣ Connection closed
+            // 🔹 Connection closed
             if (connection === 'close') {
                 const reason = lastDisconnect?.error?.output?.statusCode;
                 console.log('Connection closed, reason:', reason);
+
                 if (reason !== DisconnectReason.loggedOut) {
-                    console.log('Reconnecting in 5s...');
-                    setTimeout(start, 5000);
+                    console.log('Reconnecting in 5 seconds...');
+                    setTimeout(start, 5000); // Retry after 5 sec
                 } else {
                     console.log('Logged out. Delete auth folder and login again.');
                 }
             }
 
-            // 3️⃣ Connection open
+            // 🔹 Connection open
             else if (connection === 'open') {
                 console.log('✅ WhatsApp connected');
 
@@ -61,10 +61,10 @@ async function start() {
             }
         });
 
-        // ---------- Bulk group creator / add members / join via link ----------
+        // 5️⃣ Handle messages / group actions (placeholder)
         sock.ev.on('messages.upsert', async m => {
-            console.log('New message received', m);
-            // TODO: Add your WA features here
+            console.log('New message received:', m);
+            // Example placeholders:
             // sock.groupCreate([...members], "Group Name")
             // sock.groupUpdate(groupId, { subject: "New Name", desc: "Description" })
             // sock.groupInvite(groupId, inviteCode)
@@ -73,9 +73,10 @@ async function start() {
 
     } catch (err) {
         console.error('Error starting WA socket:', err);
+        console.log('Retrying in 5 seconds...');
         setTimeout(start, 5000);
     }
 }
 
-// Start the bot
+// Start WhatsApp bot
 start();
