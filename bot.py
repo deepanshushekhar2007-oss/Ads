@@ -1,34 +1,33 @@
-import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils import executor
 
 BOT_TOKEN = "8418461342:AAH1NJEMnCnYROk6fZrA1hG-ewaV7v38Ndw"
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(bot)
 
-@dp.message(commands=["start"])
+
+@dp.message_handler(commands=['start'])
 async def start(message: types.Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔗 Connect WhatsApp", callback_data="connect")],
-        [InlineKeyboardButton(text="👥 Create Groups", callback_data="groups")],
-        [InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")]
-    ])
-    await message.answer("🤖 WhatsApp Manager", reply_markup=kb)
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton("🔗 Connect WhatsApp", callback_data="connect"))
+    keyboard.add(types.InlineKeyboardButton("👥 Create Groups", callback_data="groups"))
+    keyboard.add(types.InlineKeyboardButton("⚙️ Settings", callback_data="settings"))
 
-@dp.callback_query()
+    await message.reply("🤖 WhatsApp Manager", reply_markup=keyboard)
+
+
+@dp.callback_query_handler(lambda c: True)
 async def callbacks(call: types.CallbackQuery):
     if call.data == "connect":
-        await call.message.edit_text("📱 WhatsApp connect feature soon...")
+        await call.message.edit_text("📱 WhatsApp connect soon...")
 
     elif call.data == "groups":
-        await call.message.edit_text("👥 Group creation feature soon...")
+        await call.message.edit_text("👥 Group creator soon...")
 
     elif call.data == "settings":
-        await call.message.edit_text("⚙️ Settings panel soon...")
+        await call.message.edit_text("⚙️ Settings soon...")
 
-async def main():
-    await dp.start_polling(bot)
 
 if name == "main":
-    asyncio.run(main())
+    executor.start_polling(dp, skip_updates=True)
