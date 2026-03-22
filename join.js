@@ -2,8 +2,23 @@ import { makeWASocket, fetchLatestBaileysVersion, useMultiFileAuthState, Disconn
 import fs from 'fs';
 import P from 'pino';
 
-async function start(links) {
+async function start() {
     try {
+        // 1️⃣ Read group links sent by Telegram
+        if (!fs.existsSync('join_links.txt')) {
+            console.log('❌ No links found!');
+            return;
+        }
+
+        let rawLinks = fs.readFileSync('join_links.txt', 'utf-8');
+        let links = rawLinks.split(/[\n,]+/).map(l => l.trim()).filter(Boolean);
+
+        if (links.length === 0) {
+            console.log('❌ No valid links found');
+            return;
+        }
+
+        // 2️⃣ Connect to WhatsApp
         const { version } = await fetchLatestBaileysVersion();
         const { state, saveCreds } = await useMultiFileAuthState('auth');
 
@@ -16,47 +31,49 @@ async function start(links) {
 
         sock.ev.on('creds.update', saveCreds);
 
-        sock.ev.on('connection.update', async (update) => {
+        sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect } = update;
-
             if (connection === 'close') {
-                const reason = lastDisconnect?.error?.output?.statusCode;
+                const reason = (lastDisconnect?.error)?.output?.statusCode;
+                console.log('Connection closed, reason:', reason);
                 if (reason !== DisconnectReason.loggedOut) {
                     console.log('Reconnecting in 5s...');
-                    setTimeout(() => start(links), 5000);
+                    setTimeout(start, 5000);
                 }
             } else if (connection === 'open') {
                 console.log('✅ WhatsApp connected');
-
-                let joinedCount = 0;
-
-                for (const link of links) {
-                    try {
-                        const result = await sock.groupAcceptInvite(link);
-                        console.log(`✅ Joined group: ${result}`);
-                        joinedCount++;
-                    } catch (err) {
-                        console.log(`❌ Failed to join group link: ${link}`, err.message);
-                    }
-                }
-
-                console.log(`🎯 Total groups joined: ${joinedCount}`);
-
-                // Create a joined flag file for Telegram bot notification
-                fs.writeFileSync("join_done.flag", `Joined ${joinedCount} group(s)`);
             }
         });
+
+        // 3️⃣ Join groups one by one
+        let success = 0;
+        let failed = 0;
+
+        for (let link of links) {
+            try {
+                const result = await sock.groupAcceptInvite(link.replace('https://chat.whatsapp.com/', ''));
+                console.log(`✅ Joined group: ${result}`);
+                success++;
+            } catch (err) {
+                console.error(`❌ Failed to join: ${link}`, err.message || err);
+                failed++;
+            }
+        }
+
+        // 4️⃣ Save summary for Telegram bot
+        const summary = {
+            total: links.length,
+            joined: success,
+            failed: failed
+        };
+
+        fs.writeFileSync('join_summary.json', JSON.stringify(summary));
+        console.log('🎯 Join summary:', summary);
+
     } catch (err) {
         console.error('Error in join.js:', err);
-        setTimeout(() => start(links), 5000);
+        setTimeout(start, 5000);
     }
 }
 
-// Get links from command line arguments
-const links = process.argv.slice(2);
-if (!links.length) {
-    console.log('❌ No group links provided!');
-    process.exit(1);
-}
-
-start(links);
+start();
