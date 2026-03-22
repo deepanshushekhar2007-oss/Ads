@@ -1,6 +1,6 @@
 import os
 import subprocess
-import time
+import asyncio
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
@@ -18,11 +18,16 @@ data = {}
 async def handle(request):
     return web.Response(text="running")
 
-def start_web():
+async def start_web():
     app = web.Application()
     app.router.add_get("/", handle)
+
     port = int(os.environ.get("PORT", 10000))
-    web.run_app(app, port=port)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
 
 # ---------- menu ----------
 def menu():
@@ -45,15 +50,30 @@ async def cb(call: types.CallbackQuery):
     uid = call.from_user.id
 
     if call.data == "connect":
-        subprocess.Popen(["node", "wa.js"])
+
         await call.message.edit_text("Generating QR...")
 
-        for _ in range(20):
+        # delete old QR
+        if os.path.exists("qr.png"):
+            os.remove("qr.png")
+
+        subprocess.Popen(["node", "wa.js"])
+
+        # wait for QR
+        for _ in range(40):
+            await asyncio.sleep(1)
+
             if os.path.exists("qr.png"):
-                await bot.send_photo(uid, open("qr.png", "rb"))
-                os.remove("qr.png")
-                return
-            time.sleep(1)
+                try:
+                    with open("qr.png", "rb") as f:
+                        await bot.send_photo(uid, f)
+
+                    os.remove("qr.png")
+                    return
+                except Exception as e:
+                    print("QR send error:", e)
+
+        await bot.send_message(uid, "❌ QR generate nahi hua")
 
     elif call.data == "bulk":
         state[uid] = "COUNT"
@@ -97,14 +117,18 @@ async def text(msg: types.Message):
 
     elif state[uid] == "JOIN":
         links = msg.text.splitlines()
+
         for link in links:
             subprocess.Popen(["node", "join.js", link.strip()])
+
         await msg.reply("Joining groups...")
         state.pop(uid)
 
     elif state[uid] == "VCF_LINK":
         link = msg.text
+
         subprocess.Popen(["node", "add.js", link])
+
         await msg.reply("Adding members from VCF...")
         state.pop(uid)
 
@@ -117,8 +141,11 @@ async def photo(msg: types.Message):
         return
 
     await msg.photo[-1].download("dp.jpg")
+
     subprocess.Popen(["node", "create.js"])
+
     await msg.reply("Creating groups...")
+
     state.pop(uid)
 
 # ---------- vcf upload ----------
@@ -130,11 +157,18 @@ async def doc(msg: types.Message):
         return
 
     await msg.document.download("contacts.vcf")
+
     state[uid] = "VCF_LINK"
+
     await msg.reply("Send group invite link")
 
 # ---------- start ----------
+async def on_startup(dp):
+    await start_web()
+
 if __name__ == "__main__":
-    from threading import Thread
-    Thread(target=start_web).start()
-    executor.start_polling(dp, skip_updates=True)
+    executor.start_polling(
+        dp,
+        skip_updates=True,
+        on_startup=on_startup
+    )
