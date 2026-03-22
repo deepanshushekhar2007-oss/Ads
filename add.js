@@ -3,31 +3,7 @@ import fs from 'fs';
 import P from 'pino';
 import vcf from 'vcf';
 
-// Read invite link from file (Telegram bot saves it here)
-let inviteLink = fs.existsSync('vcf_invite_link.txt') ? fs.readFileSync('vcf_invite_link.txt', 'utf-8').trim() : null;
-if(!inviteLink){
-    console.log('❌ No invite link provided!');
-    process.exit();
-}
-
-// Read contacts from VCF
-if(!fs.existsSync('contacts.vcf')){
-    console.log('❌ VCF file not found!');
-    process.exit();
-}
-
-const contactsVCF = fs.readFileSync('contacts.vcf', 'utf-8');
-const parsedContacts = new vcf().parse(contactsVCF); // array of contacts
-
-// Extract numbers in international format
-const numbers = parsedContacts.map(c => {
-    if(c.tel){
-        let t = Array.isArray(c.tel) ? c.tel[0].valueOf() : c.tel.valueOf();
-        return t.replace(/[^0-9]/g,''); // remove non-digit chars
-    }
-}).filter(Boolean);
-
-async function start(){
+async function start(groupInviteLink) {
     try {
         const { version } = await fetchLatestBaileysVersion();
         const { state, saveCreds } = await useMultiFileAuthState('auth');
@@ -35,46 +11,62 @@ async function start(){
         const sock = makeWASocket({
             logger: P({ level: 'silent' }),
             auth: state,
-            version
+            version,
+            printQRInTerminal: false
         });
 
         sock.ev.on('creds.update', saveCreds);
 
-        sock.ev.on('connection.update', (update) => {
+        sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
-            if(connection === 'close'){
-                const reason = (lastDisconnect?.error)?.output?.statusCode;
-                if(reason !== DisconnectReason.loggedOut){
-                    console.log('Reconnecting...');
-                    setTimeout(start, 5000);
+
+            if (connection === 'close') {
+                const reason = lastDisconnect?.error?.output?.statusCode;
+                if (reason !== DisconnectReason.loggedOut) {
+                    console.log('Reconnecting in 5s...');
+                    setTimeout(() => start(groupInviteLink), 5000);
                 }
+            } else if (connection === 'open') {
+                console.log('✅ WhatsApp connected');
+
+                // Load VCF
+                const vcfData = fs.readFileSync('contacts.vcf', 'utf-8');
+                const contacts = new vcf().parse(vcfData);
+
+                const numbers = contacts.map(c => {
+                    if (c.get('TEL')) return c.get('TEL').valueOf().replace(/\D/g, '') + "@s.whatsapp.net";
+                }).filter(Boolean);
+
+                console.log(`Total contacts to add: ${numbers.length}`);
+
+                // Accept group invite
+                const groupMeta = await sock.groupAcceptInvite(groupInviteLink);
+                console.log(`Joined group: ${groupMeta}`);
+
+                // Add members one by one
+                for (const num of numbers) {
+                    try {
+                        await sock.groupAdd(groupMeta, [num]);
+                        console.log(`✅ Added ${num}`);
+                    } catch (err) {
+                        console.log(`❌ Failed to add ${num}`, err.message);
+                    }
+                }
+
+                fs.writeFileSync("add_done.flag", `Added ${numbers.length} contacts to group`);
             }
         });
-
-        let addedMembers = [];
-
-        for(let num of numbers){
-            try {
-                // WhatsApp requires @s.whatsapp.net format
-                let jid = `${num}@s.whatsapp.net`;
-                await sock.groupAdd(inviteLink.split('/').pop(), [jid]);
-                console.log(`✅ Added: ${jid}`);
-                addedMembers.push(jid);
-                await new Promise(r => setTimeout(r, 1500)); // avoid spam
-            } catch(err){
-                console.log(`❌ Failed to add ${num}: ${err.message}`);
-            }
-        }
-
-        // Save result for Telegram bot
-        fs.writeFileSync('added_members.json', JSON.stringify(addedMembers));
-        console.log(`✅ Successfully added ${addedMembers.length} members`);
-
-    } catch(err){
-        console.error('Error in adding members:', err);
-        setTimeout(start, 5000);
+    } catch (err) {
+        console.error('Error in add.js:', err);
+        setTimeout(() => start(groupInviteLink), 5000);
     }
 }
 
-// Start
-start();
+// Get group invite link from command line
+const groupInviteLink = process.argv[2];
+if (!groupInviteLink) {
+    console.log('❌ No group invite link provided!');
+    process.exit(1);
+}
+
+start(groupInviteLink);
