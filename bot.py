@@ -1,23 +1,21 @@
 import os
-import subprocess
 import asyncio
-from io import BytesIO
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils import executor
 from aiohttp import web
-import base64
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils import executor
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from threading import Thread
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Set this in Render environment
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
 state = {}
 data = {}
 
-# ---------- Render keep alive ----------
+# ---------- Render keep-alive ----------
 async def handle(request):
-    return web.Response(text="running")
+    return web.Response(text="Bot is running ✅")
 
 def start_web():
     app = web.Application()
@@ -25,7 +23,7 @@ def start_web():
     port = int(os.environ.get("PORT", 10000))
     web.run_app(app, port=port)
 
-# ---------- menu ----------
+# ---------- Telegram menu ----------
 def menu():
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
@@ -38,55 +36,54 @@ def menu():
 
 @dp.message_handler(commands=['start'])
 async def start(msg: types.Message):
-    await msg.reply("🤖 WhatsApp Automation Panel", reply_markup=menu())
+    await msg.reply(
+        "🤖 WhatsApp Automation Panel\n\n"
+        "Select an option from the menu below:",
+        reply_markup=menu()
+    )
 
-# ---------- buttons ----------
+# ---------- Button callbacks ----------
 @dp.callback_query_handler(lambda c: True)
 async def cb(call: types.CallbackQuery):
     uid = call.from_user.id
 
     if call.data == "connect":
-        # Start Node process
-        proc = subprocess.Popen(
-            ["node", "wa.js"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=os.getcwd()
+        # Run Node.js WhatsApp bot
+        os.system("node wa.js &")
+        await call.message.edit_text(
+            "🔹 Generating WhatsApp QR code...\n"
+            "⚠️ You have 30 seconds to scan the QR code before it expires."
         )
-        await call.message.edit_text("Generating QR...")
 
-        # Read QR base64 from Node stdout
-        while True:
-            line = proc.stdout.readline()
-            if not line:
-                await asyncio.sleep(0.5)
-                continue
-            if "QR_BASE64_START" in line:
-                qr_data = ""
-                while True:
-                    qr_line = proc.stdout.readline()
-                    if "QR_BASE64_END" in qr_line:
-                        break
-                    qr_data += qr_line
-                # Send QR to Telegram
-                qr_bytes = base64.b64decode(qr_data.split(",")[1])
-                await bot.send_photo(uid, BytesIO(qr_bytes))
+        # Async polling QR & connected status
+        for _ in range(30):
+            if os.path.exists("qr.png"):
+                await bot.send_photo(uid, open("qr.png", "rb"),
+                                     caption="📷 Scan this QR with WhatsApp within 30 seconds!")
+                os.remove("qr.png")
                 break
+            await asyncio.sleep(1)
+
+        for _ in range(30):
+            if os.path.exists("wa_connected.flag"):
+                await bot.send_message(uid, "✅ WhatsApp connected successfully!")
+                os.remove("wa_connected.flag")
+                break
+            await asyncio.sleep(1)
 
     elif call.data == "bulk":
         state[uid] = "COUNT"
-        await call.message.edit_text("How many groups create?")
+        await call.message.edit_text("Enter the number of groups to create:")
 
     elif call.data == "join":
         state[uid] = "JOIN"
-        await call.message.edit_text("Send invite link(s) (one per line)")
+        await call.message.edit_text("Send invite link(s), one per line:")
 
     elif call.data == "vcf":
         state[uid] = "VCF_FILE"
-        await call.message.edit_text("Upload VCF file")
+        await call.message.edit_text("Upload your VCF file containing participants:")
 
-# ---------- text ----------
+# ---------- Text messages ----------
 @dp.message_handler(content_types=['text'])
 async def text(msg: types.Message):
     uid = msg.from_user.id
@@ -94,50 +91,54 @@ async def text(msg: types.Message):
         return
 
     if state[uid] == "COUNT":
-        data[uid] = {"count": int(msg.text)}
+        try:
+            data[uid] = {"count": int(msg.text)}
+        except ValueError:
+            await msg.reply("❌ Please enter a valid number.")
+            return
         state[uid] = "NAME"
-        await msg.reply("Base group name?")
+        await msg.reply("Enter base group name:")
 
     elif state[uid] == "NAME":
         data[uid]["name"] = msg.text
         state[uid] = "DESC"
-        await msg.reply("Description?")
+        await msg.reply("Enter group description:")
 
     elif state[uid] == "DESC":
         data[uid]["desc"] = msg.text
         state[uid] = "NUMBERS"
-        await msg.reply("Send participants numbers comma separated")
+        await msg.reply("Send participant numbers (comma separated):")
 
     elif state[uid] == "NUMBERS":
         data[uid]["numbers"] = msg.text
         state[uid] = "DP"
-        await msg.reply("Send group DP image")
+        await msg.reply("Send group DP image:")
 
     elif state[uid] == "JOIN":
         links = msg.text.splitlines()
         for link in links:
-            subprocess.Popen(["node", "join.js", link.strip()])
-        await msg.reply("Joining groups...")
+            os.system(f"node join.js {link.strip()}")
+        await msg.reply("Joining groups via link(s)...")
         state.pop(uid)
 
     elif state[uid] == "VCF_LINK":
         link = msg.text
-        subprocess.Popen(["node", "add.js", link])
+        os.system(f"node add.js {link}")
         await msg.reply("Adding members from VCF...")
         state.pop(uid)
 
-# ---------- photo ----------
+# ---------- Photo handler ----------
 @dp.message_handler(content_types=['photo'])
 async def photo(msg: types.Message):
     uid = msg.from_user.id
     if state.get(uid) != "DP":
         return
     await msg.photo[-1].download("dp.jpg")
-    subprocess.Popen(["node", "create.js"])
+    os.system("node create.js")
     await msg.reply("Creating groups...")
     state.pop(uid)
 
-# ---------- vcf upload ----------
+# ---------- Document handler (VCF) ----------
 @dp.message_handler(content_types=['document'])
 async def doc(msg: types.Message):
     uid = msg.from_user.id
@@ -145,10 +146,9 @@ async def doc(msg: types.Message):
         return
     await msg.document.download("contacts.vcf")
     state[uid] = "VCF_LINK"
-    await msg.reply("Send group invite link")
+    await msg.reply("Send the WhatsApp group invite link to add members:")
 
-# ---------- start ----------
+# ---------- Start ----------
 if __name__ == "__main__":
-    from threading import Thread
-    Thread(target=start_web).start()
+    Thread(target=start_web, daemon=True).start()
     executor.start_polling(dp, skip_updates=True)
