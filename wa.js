@@ -1,77 +1,91 @@
-import { makeWASocket, fetchLatestBaileysVersion, useSingleFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import { makeWASocket, fetchLatestBaileysVersion, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
 import fs from 'fs';
 import P from 'pino';
 import qrcode from 'qrcode';
 
-// Use single-file auth state for stability
-const { state, saveCreds } = useSingleFileAuthState('auth.json');
-
-let socket;
+let socketInstance = null; // Keep a single socket instance
 
 async function start() {
     try {
+        // 1️⃣ Fetch latest WA Web version
         const { version } = await fetchLatestBaileysVersion();
 
-        socket = makeWASocket({
+        // 2️⃣ Multi-file auth state
+        const { state, saveCreds } = await useMultiFileAuthState('auth');
+
+        // 3️⃣ Create WhatsApp socket only if not already running
+        if (socketInstance) return socketInstance;
+
+        const sock = makeWASocket({
             logger: P({ level: 'silent' }),
             auth: state,
             version,
-            printQRInTerminal: false
+            printQRInTerminal: false,
+            patchMessageBeforeSending: (msg) => {
+                if (msg?.extendedTextMessage?.contextInfo) delete msg.extendedTextMessage.contextInfo;
+                return msg;
+            }
         });
 
-        socket.ev.on('creds.update', saveCreds);
+        socketInstance = sock;
 
-        // Connection update
-        socket.ev.on('connection.update', async (update) => {
+        // 4️⃣ Save credentials on update
+        sock.ev.on('creds.update', saveCreds);
+
+        // 5️⃣ Connection updates
+        sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr, me } = update;
 
-            // QR received
+            // 🔹 QR received
             if (qr) {
                 const qrDataUrl = await qrcode.toDataURL(qr);
-                fs.writeFileSync("qr.png", qrDataUrl.replace(/^data:image\/png;base64,/, ""), "base64");
-                console.log("QR generated. Scan within 30 seconds!");
-                console.log("QR_BASE64_START\n" + qrDataUrl + "\nQR_BASE64_END");
+
+                console.log("QR_BASE64_START");
+                console.log(qrDataUrl);
+                console.log("QR_BASE64_END");
+
+                const base64Data = qrDataUrl.replace(/^data:image\/png;base64,/, "");
+                fs.writeFileSync("qr.png", base64Data, "base64");
             }
 
-            // Connection closed
+            // 🔹 Connection closed
             if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                console.log('Connection closed, reason:', statusCode);
+                const reason = lastDisconnect?.error?.output?.statusCode || lastDisconnect?.error?.message;
+                console.log('Connection closed, reason:', reason);
 
-                if (statusCode === DisconnectReason.loggedOut) {
-                    console.log('❌ Logged out. Delete auth.json and login again.');
-                    fs.unlinkSync('auth.json'); // remove old auth
+                if (reason !== DisconnectReason.loggedOut && reason !== 401) {
+                    console.log('Reconnecting in 10 seconds...');
+                    socketInstance = null;
+                    setTimeout(start, 10000);
                 } else {
-                    console.log('🔄 Reconnecting in 5s...');
-                    setTimeout(() => start(), 5000); // retry
+                    console.log('Logged out. Delete auth folder and login again.');
+                    socketInstance = null;
                 }
             }
 
-            // Connection open
-            if (connection === 'open') {
+            // 🔹 Connection open
+            else if (connection === 'open') {
                 console.log('✅ WhatsApp connected');
-                const userNumber = me?.user || 'unknown';
-                fs.writeFileSync("wa_connected.flag", userNumber); // inform Telegram bot
+
+                const userNumber = me?.user || "unknown";
+                fs.writeFileSync("wa_connected.flag", userNumber);
             }
         });
 
-        // Keep-alive ping every 25s to avoid session expiry
-        setInterval(() => {
-            if (socket?.ws.readyState === 1) {
-                socket?.sendPresenceUpdate('available');
-            }
-        }, 25000);
-
-        // Messages placeholder
-        socket.ev.on('messages.upsert', (m) => {
-            console.log('New message:', m);
+        // 6️⃣ Handle incoming messages (placeholder for future features)
+        sock.ev.on('messages.upsert', async (m) => {
+            console.log('New message received:', m);
         });
+
+        return sock;
 
     } catch (err) {
-        console.error('Error in WhatsApp bot:', err);
-        setTimeout(start, 5000);
+        console.error('Error starting WA socket:', err);
+        console.log('Retrying in 10 seconds...');
+        socketInstance = null;
+        setTimeout(start, 10000);
     }
 }
 
-// Start bot
+// Start WhatsApp bot
 start();
