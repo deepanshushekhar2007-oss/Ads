@@ -1,20 +1,80 @@
-import pkg from "@whiskeysockets/baileys"
-const { default: makeWASocket, useMultiFileAuthState } = pkg
-import fs from "fs"
+import { makeWASocket, fetchLatestBaileysVersion, useMultiFileAuthState, DisconnectReason, proto } from '@whiskeysockets/baileys';
+import fs from 'fs';
+import P from 'pino';
 
-async function run() {
-    const { state } = await useMultiFileAuthState("auth")
-    const sock = makeWASocket({ auth: state })
+// Load group creation data sent from bot
+let rawData = fs.existsSync('group_data.json') ? JSON.parse(fs.readFileSync('group_data.json')) : null;
 
-    const name = "Group"
-    const numbers = []
+async function start() {
+    if (!rawData) {
+        console.log('❌ No group data found!');
+        return;
+    }
 
-    const res = await sock.groupCreate(name, numbers)
+    try {
+        const { version } = await fetchLatestBaileysVersion();
+        const { state, saveCreds } = await useMultiFileAuthState('auth');
 
-    if (fs.existsSync("dp.jpg")) {
-        const img = fs.readFileSync("dp.jpg")
-        await sock.updateProfilePicture(res.id, img)
+        const sock = makeWASocket({
+            logger: P({ level: 'silent' }),
+            auth: state,
+            version
+        });
+
+        sock.ev.on('creds.update', saveCreds);
+
+        sock.ev.on('connection.update', (update) => {
+            const { connection, lastDisconnect } = update;
+            if(connection === 'close'){
+                const reason = (lastDisconnect?.error)?.output?.statusCode;
+                if(reason !== DisconnectReason.loggedOut){
+                    console.log('Reconnecting...');
+                    setTimeout(start, 5000);
+                }
+            }
+        });
+
+        // Loop through each group
+        let groupLinks = [];
+
+        for(let i=1; i<=rawData.count; i++){
+            const groupName = rawData.name + (rawData.count > 1 ? ` #${i}` : '');
+            const participants = rawData.numbers.split(',').map(n => n.trim() + '@s.whatsapp.net'); // single participant
+            const desc = rawData.desc || '';
+            const dpBuffer = fs.existsSync('dp.jpg') && rawData.dp === true ? fs.readFileSync('dp.jpg') : null;
+
+            // Create group
+            let response = await sock.groupCreate(groupName, participants, desc);
+            const groupId = response.gid;
+            console.log(`✅ Group created: ${groupName} (${groupId})`);
+
+            // Set group profile picture if DP exists
+            if(dpBuffer){
+                await sock.updateProfilePicture(groupId, dpBuffer);
+            }
+
+            // Apply group settings toggles
+            if(rawData.settings){
+                const { restrictAdminOnly, restrictInvite, restrictMsg, restrictMedia } = rawData.settings;
+                // Example: restrict messages
+                await sock.groupSettingUpdate(groupId, 'announcement', restrictMsg ? true : false);
+                // Additional settings toggles can be applied here
+            }
+
+            // Get invite link
+            let inviteCode = await sock.groupInviteCode(groupId);
+            groupLinks.push(`https://chat.whatsapp.com/${inviteCode}`);
+        }
+
+        // Save links to a file for bot to read
+        fs.writeFileSync('group_links.json', JSON.stringify(groupLinks));
+        console.log('All groups created ✅');
+        console.log('Group links:', groupLinks);
+
+    } catch (err) {
+        console.error('Error creating groups:', err);
+        setTimeout(start, 5000);
     }
 }
 
-run()
+start();
