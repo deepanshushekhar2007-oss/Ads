@@ -6,23 +6,17 @@ from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from threading import Thread
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Set in Render environment
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
 state = {}
 data = {}
+user_whatsapp = {}  # To track which user has connected which WA number
 
 # ---------- Render keep-alive ----------
 async def handle(request):
-    status_msg = "Bot is running ✅\n"
-    if os.path.exists("wa_connected.flag"):
-        with open("wa_connected.flag", "r") as f:
-            ws_number = f.read().strip()
-        status_msg += f"WhatsApp connected: {ws_number}"
-    else:
-        status_msg += "WhatsApp not connected ❌"
-    return web.Response(text=status_msg)
+    return web.Response(text="Bot is running ✅")
 
 def start_web():
     app = web.Application()
@@ -31,7 +25,7 @@ def start_web():
     web.run_app(app, port=port)
 
 # ---------- Telegram menu ----------
-def menu():
+def menu(uid=None):
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
         InlineKeyboardButton("🔗 Connect WhatsApp", callback_data="connect"),
@@ -39,19 +33,22 @@ def menu():
         InlineKeyboardButton("🔗 Join via Link", callback_data="join"),
         InlineKeyboardButton("📂 Add via VCF", callback_data="vcf")
     )
-    if os.path.exists("wa_connected.flag"):
-        kb.add(InlineKeyboardButton("❌ Logout WhatsApp", callback_data="logout"))
+    if uid and user_whatsapp.get(uid):
+        kb.add(InlineKeyboardButton("🔒 Logout WhatsApp", callback_data="logout"))
     return kb
 
+# ---------- Start command ----------
 @dp.message_handler(commands=['start'])
-async def start(msg: types.Message):
-    status = "WhatsApp not connected ❌"
-    if os.path.exists("wa_connected.flag"):
-        with open("wa_connected.flag", "r") as f:
-            status = f"WhatsApp connected: {f.read().strip()}"
+async def start_msg(msg: types.Message):
+    uid = msg.from_user.id
+    status_text = "❌ Not connected"
+    if uid in user_whatsapp:
+        status_text = f"✅ Connected: {user_whatsapp[uid]}"
     await msg.reply(
-        f"🤖 WhatsApp Automation Panel\n\nStatus: {status}\n\nSelect an option from the menu below:",
-        reply_markup=menu()
+        f"🤖 WhatsApp Automation Panel\n\n"
+        f"Status: {status_text}\n"
+        f"Select an option from the menu below:",
+        reply_markup=menu(uid)
     )
 
 # ---------- Button callbacks ----------
@@ -61,66 +58,64 @@ async def cb(call: types.CallbackQuery):
 
     # ---------- WhatsApp connect ----------
     if call.data == "connect":
-        if os.path.exists("wa_connected.flag"):
-            with open("wa_connected.flag", "r") as f:
-                ws_number = f.read().strip()
-            await call.answer(f"✅ WhatsApp already connected: {ws_number}", show_alert=True)
+        if uid in user_whatsapp:
+            await call.message.reply(f"✅ WhatsApp already connected: {user_whatsapp[uid]}")
             return
-
         os.system("node wa.js &")
         await call.message.edit_text(
             "🔹 Generating WhatsApp QR code...\n"
-            "⚠️ Scan QR within 30 seconds or it will expire."
+            "⚠️ You have 30 seconds to scan the QR code before it expires."
         )
 
         # Poll QR
         for _ in range(30):
             if os.path.exists("qr.png"):
                 await bot.send_photo(uid, open("qr.png", "rb"),
-                                     caption="Scan this QR in WhatsApp within 30 seconds!")
+                                     caption="Scan this QR with WhatsApp within 30 seconds!")
                 os.remove("qr.png")
                 break
             time.sleep(1)
 
-        # Poll WhatsApp connection
+        # Poll connection flag
         for _ in range(30):
             if os.path.exists("wa_connected.flag"):
-                with open("wa_connected.flag", "r") as f:
-                    ws_number = f.read().strip()
-                await bot.send_message(uid, f"✅ WhatsApp connected: {ws_number}")
+                with open("wa_connected.flag") as f:
+                    number = f.read().strip()
+                    user_whatsapp[uid] = number
+                await bot.send_message(uid, f"✅ WhatsApp connected: {number}")
+                os.remove("wa_connected.flag")
                 break
             time.sleep(1)
 
     # ---------- Logout WhatsApp ----------
     elif call.data == "logout":
-        if os.path.exists("wa_connected.flag"):
-            os.remove("wa_connected.flag")
-            if os.path.exists("auth"):
-                os.system("rm -rf auth")
-            await call.answer("❌ WhatsApp logged out successfully.", show_alert=True)
+        if uid in user_whatsapp:
+            os.system("node logout.js")  # Your logout script for wa.js
+            await bot.send_message(uid, f"🔓 WhatsApp logged out: {user_whatsapp[uid]}")
+            del user_whatsapp[uid]
         else:
-            await call.answer("WhatsApp is not connected.", show_alert=True)
+            await bot.send_message(uid, "❌ No WhatsApp connected")
 
-    # ---------- Bulk Group Creator ----------
+    # ---------- Bulk group creation ----------
     elif call.data == "bulk":
-        if not os.path.exists("wa_connected.flag"):
-            await call.answer("❌ WhatsApp not connected. Please connect first.", show_alert=True)
+        if uid not in user_whatsapp:
+            await call.message.reply("❌ Connect WhatsApp first!")
             return
         state[uid] = "COUNT"
         await call.message.edit_text("Enter the number of groups to create:")
 
     # ---------- Join via link ----------
     elif call.data == "join":
-        if not os.path.exists("wa_connected.flag"):
-            await call.answer("❌ WhatsApp not connected. Please connect first.", show_alert=True)
+        if uid not in user_whatsapp:
+            await call.message.reply("❌ Connect WhatsApp first!")
             return
         state[uid] = "JOIN"
         await call.message.edit_text("Send invite link(s), one per line:")
 
     # ---------- Add via VCF ----------
     elif call.data == "vcf":
-        if not os.path.exists("wa_connected.flag"):
-            await call.answer("❌ WhatsApp not connected. Please connect first.", show_alert=True)
+        if uid not in user_whatsapp:
+            await call.message.reply("❌ Connect WhatsApp first!")
             return
         state[uid] = "VCF_FILE"
         await call.message.edit_text("Upload your VCF file containing participants:")
@@ -132,6 +127,7 @@ async def text(msg: types.Message):
     if uid not in state:
         return
 
+    # Bulk group creation flow
     if state[uid] == "COUNT":
         data[uid] = {"count": int(msg.text)}
         state[uid] = "NAME"
@@ -145,22 +141,16 @@ async def text(msg: types.Message):
             InlineKeyboardButton("Yes", callback_data="desc_yes"),
             InlineKeyboardButton("No", callback_data="desc_no")
         )
-        await msg.reply("Do you want to add a group description?", reply_markup=kb)
+        await msg.reply("Do you want to add description?", reply_markup=kb)
 
-    elif state[uid] == "NUMBERS":
-        data[uid]["numbers"] = msg.text
-        state[uid] = "DP_OPTION"
-        kb = InlineKeyboardMarkup(row_width=2)
-        kb.add(
-            InlineKeyboardButton("Yes", callback_data="dp_yes"),
-            InlineKeyboardButton("No", callback_data="dp_no")
-        )
-        await msg.reply("Do you want to add a group DP?", reply_markup=kb)
+    elif state[uid] == "DESC":
+        data[uid]["desc"] = msg.text
+        state[uid] = "NUMBERS"
+        await msg.reply("Send participant numbers (comma separated):")
 
     elif state[uid] == "JOIN":
         links = msg.text.splitlines()
-        for link in links:
-            os.system(f"node join.js {link.strip()}")
+        os.system(f"node join.js '{','.join(links)}'")
         await msg.reply("Joining groups via link(s)...")
         state.pop(uid)
 
@@ -177,17 +167,9 @@ async def photo(msg: types.Message):
     if state.get(uid) != "DP":
         return
     await msg.photo[-1].download("dp.jpg")
-    # Ask group settings toggle
-    state[uid] = "GROUP_SETTINGS"
-    kb = InlineKeyboardMarkup(row_width=2)
-    kb.add(
-        InlineKeyboardButton("Admin Only", callback_data="setting_admin"),
-        InlineKeyboardButton("Invite Link", callback_data="setting_invite"),
-        InlineKeyboardButton("Send Messages", callback_data="setting_msg"),
-        InlineKeyboardButton("Send Media", callback_data="setting_media"),
-        InlineKeyboardButton("Save & Create Group", callback_data="save_group")
-    )
-    await msg.reply("Configure group settings (toggle buttons):", reply_markup=kb)
+    os.system("node create.js")
+    await msg.reply("Creating groups...")
+    state.pop(uid)
 
 # ---------- Document handler (VCF) ----------
 @dp.message_handler(content_types=['document'])
