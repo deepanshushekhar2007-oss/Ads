@@ -6,13 +6,13 @@ from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from threading import Thread
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Set in Render environment
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
 state = {}
 data = {}
-user_whatsapp = {}  # To track which user has connected which WA number
+user_whatsapp = {}  # Track which user has connected which WhatsApp
 
 # ---------- Render keep-alive ----------
 async def handle(request):
@@ -33,7 +33,7 @@ def menu(uid=None):
         InlineKeyboardButton("🔗 Join via Link", callback_data="join"),
         InlineKeyboardButton("📂 Add via VCF", callback_data="vcf")
     )
-    if uid and user_whatsapp.get(uid):
+    if uid in user_whatsapp:
         kb.add(InlineKeyboardButton("🔒 Logout WhatsApp", callback_data="logout"))
     return kb
 
@@ -61,6 +61,7 @@ async def cb(call: types.CallbackQuery):
         if uid in user_whatsapp:
             await call.message.reply(f"✅ WhatsApp already connected: {user_whatsapp[uid]}")
             return
+
         os.system("node wa.js &")
         await call.message.edit_text(
             "🔹 Generating WhatsApp QR code...\n"
@@ -76,7 +77,7 @@ async def cb(call: types.CallbackQuery):
                 break
             time.sleep(1)
 
-        # Poll connection flag
+        # Poll WhatsApp connection flag
         for _ in range(30):
             if os.path.exists("wa_connected.flag"):
                 with open("wa_connected.flag") as f:
@@ -90,7 +91,7 @@ async def cb(call: types.CallbackQuery):
     # ---------- Logout WhatsApp ----------
     elif call.data == "logout":
         if uid in user_whatsapp:
-            os.system("node logout.js")  # Your logout script for wa.js
+            os.system("node logout.js")  # Must handle logout in wa.js
             await bot.send_message(uid, f"🔓 WhatsApp logged out: {user_whatsapp[uid]}")
             del user_whatsapp[uid]
         else:
