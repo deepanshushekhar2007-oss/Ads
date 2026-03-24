@@ -1,2 +1,6 @@
-aiogram==2.25.1
-aiohttp
+python-telegram-bot==20.7
+flask==3.0.2
+pymongo==4.6.3
+psutil==5.9.8
+gunicorn==21.2.0
+python-dotenv==1.0.1
