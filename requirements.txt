@@ -1,6 +1,6 @@
-aiogram==3.26.0
-telethon==1.42.0
-python-dotenv==1.2.2
-aiohttp==3.13.3
-aiofiles==25.1.0
-flask==2.3.4
+aiogram
+telethon
+python-dotenv
+aiohttp
+aiofiles
+flask
