@@ -4,8 +4,8 @@ import asyncio
 from aiogram import types, Dispatcher
 from aiogram.filters import Command
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.client.bot import Bot
-from aiogram.client.bot_api import DefaultBotProperties
+from aiogram.client.bot import Bot, DefaultBotProperties
+from aiogram.fsm.storage.memory import MemoryStorage
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
@@ -25,7 +25,8 @@ except Exception as e:
 # ================= AIROGRAM BOT =================
 default_props = DefaultBotProperties(parse_mode="HTML")
 bot = Bot(token=BOT_TOKEN, default=default_props, session=AiohttpSession())
-dp = Dispatcher()
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
 
 # ================= HELPER FUNCTION =================
 def build_msg(title: str, data: dict):
