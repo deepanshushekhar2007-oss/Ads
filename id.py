@@ -1,36 +1,36 @@
-import os
 import re
 import asyncio
-from aiogram import types, Dispatcher
+import os
+from threading import Thread
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.client.bot import Bot, DefaultBotProperties
+from aiogram.client.bot import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from flask import Flask
 
-# ================= ENV VARIABLES =================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_ID = int(os.getenv("API_ID", 0))
-API_HASH = os.getenv("API_HASH")
-SESSION_STRING = os.getenv("SESSION_STRING")
-PORT = int(os.environ.get("PORT", 8000))  # Render default port
+# ===================== CONFIG =====================
+BOT_TOKEN = "8355502020:AAHhZda0HyVe0pf-GHWFZcFHurZVtlz6snA"        # Telegram Bot Token
+API_ID = 34316889                          # Your API ID
+API_HASH = "c902c878591621a436b1d24798121234"          # Your API HASH
+SESSION_STRING = "1BVtsOK8Bu2ByB2lvcoDb9GVtRcf20R2QqnqVQIOQSqBkRCzvOqbHzsP623aIcs_yO-qcbE3nZLlf17O-Y9YFlH6S8AZBOKbBrPXLDnnjfl6w4Xrd2GU5plXNAmC9TpBwTlPJSTr2VwORZpK6i0kXO7s9izbPsU2mlcOYy_kLnp8oUkB4UFIWv3YM3zKGS0Tnx8ZnpQ55dFTwNujBKmmZaUJwx1gwY2j2TM68mnAFUslLjCJHrcpK7uZ9KJHc-XlU6lvlSYX3TPS06IrQcCvIF59z9nYDSWG8ihkBLnGgHWudw6t258JyCFKtbMopimtZP6xChj7z2MK_JaZgV3SwSfAF6QRJuHY="   # Your Telegram userbot session
 
-# ================= TELETHON CLIENT =================
+# ===================== TELETHON CLIENT =====================
 try:
     client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 except Exception as e:
     print("⚠️ Error initializing Telethon client:", e)
     client = None
 
-# ================= AIROGRAM BOT =================
+# ===================== AIROGRAM BOT =====================
 default_props = DefaultBotProperties(parse_mode="HTML")
 bot = Bot(token=BOT_TOKEN, default=default_props, session=AiohttpSession())
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-# ================= HELPER FUNCTION =================
+# ===================== HELPERS =====================
 def build_msg(title: str, data: dict):
     msg = f"<b>🔹 {title}</b>\n━━━━━━━━━━━━━━━\n"
     for k, v in data.items():
@@ -38,7 +38,7 @@ def build_msg(title: str, data: dict):
     msg += "━━━━━━━━━━━━━━━\n<i>Made by @SPIDYWS</i>"
     return msg
 
-# ================= START COMMAND =================
+# ===================== START COMMAND =====================
 @dp.message(Command("start"))
 async def start(message: types.Message):
     await message.answer(
@@ -53,50 +53,26 @@ async def start(message: types.Message):
         "<i>Made by: @SPIDYWS</i>"
     )
 
-# ================= MAIN HANDLER =================
+# ===================== MAIN HANDLER =====================
 @dp.message()
 async def finder(message: types.Message):
     text = (message.text or "").strip()
     try:
-        # ---------- Forwarded Chat ----------
         if message.forward_from_chat:
             chat = message.forward_from_chat
-            await message.reply(
-                f"<b>📩 Forwarded Chat Found</b>\n"
-                "━━━━━━━━━━━━━━━\n"
-                f"• <b>Name:</b> {chat.title}\n"
-                f"• <b>Chat ID:</b> <code>{chat.id}</code>\n"
-                "━━━━━━━━━━━━━━━\n"
-                "<i>Made by @SPIDYWS</i>"
-            )
+            await message.reply(build_msg("📩 Forwarded Chat Found", {"Name": chat.title, "Chat ID": chat.id}))
             return
-
-        # ---------- Forwarded User ----------
         if message.forward_from:
             user_id = message.forward_from.id
-            await message.reply(
-                f"<b>👤 Forwarded User Found</b>\n"
-                "━━━━━━━━━━━━━━━\n"
-                f"• <b>User ID:</b> <code>{user_id}</code>\n"
-                "━━━━━━━━━━━━━━━\n"
-                "<i>Made by @SPIDYWS</i>"
-            )
+            await message.reply(build_msg("👤 Forwarded User Found", {"User ID": user_id}))
             return
 
-        # ---------- Message Link ----------
         msg_link = re.search(r"t\.me\/c\/(\d+)\/(\d+)", text)
         if msg_link:
             chat_id = f"-100{msg_link.group(1)}"
-            await message.reply(
-                f"<b>📊 Message Link Detected</b>\n"
-                "━━━━━━━━━━━━━━━\n"
-                f"• <b>Chat ID:</b> <code>{chat_id}</code>\n"
-                "━━━━━━━━━━━━━━━\n"
-                "<i>Made by @SPIDYWS</i>"
-            )
+            await message.reply(build_msg("📊 Message Link Detected", {"Chat ID": chat_id}))
             return
 
-        # ---------- Public Link ----------
         public = re.search(r"t\.me\/([A-Za-z0-9_]+)", text)
         if public and client:
             username = public.group(1)
@@ -104,54 +80,44 @@ async def finder(message: types.Message):
                 chat = await client.get_entity(username)
                 chat_id = getattr(chat, "id", "N/A")
                 name = getattr(chat, "title", username)
-                await message.reply(
-                    f"<b>🔗 Chat Found</b>\n"
-                    "━━━━━━━━━━━━━━━\n"
-                    f"• <b>Name:</b> {name}\n"
-                    f"• <b>Chat ID:</b> <code>{chat_id}</code>\n"
-                    "━━━━━━━━━━━━━━━\n"
-                    "<i>Made by @SPIDYWS</i>"
-                )
+                await message.reply(build_msg("🔗 Chat Found", {"Name": name, "Chat ID": chat_id}))
             except Exception:
                 await message.reply("❌ Unable to fetch chat ID")
             return
 
-        # ---------- Username ----------
         if text.startswith("@") and client:
             try:
                 entity = await client.get_entity(text)
-                await message.reply(
-                    f"<b>👤 User Found</b>\n"
-                    "━━━━━━━━━━━━━━━\n"
-                    f"• <b>User ID:</b> <code>{entity.id}</code>\n"
-                    "━━━━━━━━━━━━━━━\n"
-                    "<i>Made by @SPIDYWS</i>"
-                )
+                await message.reply(build_msg("👤 User Found", {"User ID": entity.id}))
             except Exception:
                 await message.reply("❌ User not found")
             return
 
-        # ---------- No match ----------
         await message.reply("❌ Unable to detect ID")
 
     except Exception as e:
         print("ERROR:", e)
         await message.reply("❌ Something went wrong! Make sure the input is correct.")
 
-# ================= RUN BOT =================
-async def start_bot():
-    if client:
-        await client.start()
-    await dp.start_polling(bot)
+# ===================== FLASK KEEP-ALIVE =====================
+app = Flask("keep_alive")
 
-# ================= DUMMY WEB SERVER FOR RENDER =================
-app = Flask("bot")
 @app.route("/")
 def home():
-    return "Bot is running 🚀"
+    return "Bot is running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))  # Render requires this
+    app.run(host="0.0.0.0", port=port)
+
+# ===================== MAIN RUN =====================
+async def main():
+    if client:
+        await client.start()
+    print("🚀 Bot started...")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(start_bot())
-    # Start Flask server to bind port for Render
-    app.run(host="0.0.0.0", port=PORT)
+    # Start Flask in background thread for Render Web Service
+    Thread(target=run_flask).start()
+    asyncio.run(main())
