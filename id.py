@@ -7,7 +7,7 @@ from aiogram.filters import Command
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.bot import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
-from telethon import TelegramClient
+from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from flask import Flask
 
@@ -15,14 +15,10 @@ from flask import Flask
 BOT_TOKEN = "8355502020:AAHhZda0HyVe0pf-GHWFZcFHurZVtlz6snA"        # Telegram Bot Token
 API_ID = 34316889                          # Your API ID
 API_HASH = "c902c878591621a436b1d24798121234"          # Your API HASH
-SESSION_STRING = "1BVtsOK8Bu2ByB2lvcoDb9GVtRcf20R2QqnqVQIOQSqBkRCzvOqbHzsP623aIcs_yO-qcbE3nZLlf17O-Y9YFlH6S8AZBOKbBrPXLDnnjfl6w4Xrd2GU5plXNAmC9TpBwTlPJSTr2VwORZpK6i0kXO7s9izbPsU2mlcOYy_kLnp8oUkB4UFIWv3YM3zKGS0Tnx8ZnpQ55dFTwNujBKmmZaUJwx1gwY2j2TM68mnAFUslLjCJHrcpK7uZ9KJHc-XlU6lvlSYX3TPS06IrQcCvIF59z9nYDSWG8ihkBLnGgHWudw6t258JyCFKtbMopimtZP6xChj7z2MK_JaZgV3SwSfAF6QRJuHY="   # Your Telegram userbot session
+SESSION_STRING = "1BVtsOK8Bu2ByB2lvcoDb9GVtRcf20R2QqnqVQIOQSqBkRCzvOqbHzsP623aIcs_yO-qcbE3nZLlf17O-Y9YFlH6S8AZBOKbBrPXLDnnjfl6w4Xrd2GU5plXNAmC9TpBwTlPJSTr2VwORZpK6i0kXO7s9izbPsU2mlcOYy_kLnp8oUkB4UFIWv3YM3zKGS0Tnx8ZnpQ55dFTwNujBKmmZaUJwx1gwY2j2TM68mnAFUslLjCJHrcpK7uZ9KJHc-XlU6lvlSYX3TPS06IrQcCvIF59z9nYDSWG8ihkBLnGgHWudw6t258JyCFKtbMopimtZP6xChj7z2MK_JaZgV3SwSfAF6QRJuHY="   # Telegram userbot session
 
 # ===================== TELETHON CLIENT =====================
-try:
-    client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-except Exception as e:
-    print("⚠️ Error initializing Telethon client:", e)
-    client = None
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 # ===================== AIROGRAM BOT =====================
 default_props = DefaultBotProperties(parse_mode="HTML")
@@ -58,21 +54,25 @@ async def start(message: types.Message):
 async def finder(message: types.Message):
     text = (message.text or "").strip()
     try:
+        # Forwarded chat
         if message.forward_from_chat:
             chat = message.forward_from_chat
             await message.reply(build_msg("📩 Forwarded Chat Found", {"Name": chat.title, "Chat ID": chat.id}))
             return
+        # Forwarded user
         if message.forward_from:
             user_id = message.forward_from.id
             await message.reply(build_msg("👤 Forwarded User Found", {"User ID": user_id}))
             return
 
+        # Message link t.me/c/...
         msg_link = re.search(r"t\.me\/c\/(\d+)\/(\d+)", text)
         if msg_link:
             chat_id = f"-100{msg_link.group(1)}"
             await message.reply(build_msg("📊 Message Link Detected", {"Chat ID": chat_id}))
             return
 
+        # Public username/group link
         public = re.search(r"t\.me\/([A-Za-z0-9_]+)", text)
         if public and client:
             username = public.group(1)
@@ -85,6 +85,7 @@ async def finder(message: types.Message):
                 await message.reply("❌ Unable to fetch chat ID")
             return
 
+        # User by @username
         if text.startswith("@") and client:
             try:
                 entity = await client.get_entity(text)
@@ -99,25 +100,41 @@ async def finder(message: types.Message):
         print("ERROR:", e)
         await message.reply("❌ Something went wrong! Make sure the input is correct.")
 
+# ===================== TELETHON AUTO-RECONNECT =====================
+async def start_telethon():
+    while True:
+        try:
+            print("🔌 Connecting to Telegram...")
+            await client.start()
+            print("✅ Telethon connected!")
+            await client.run_until_disconnected()
+        except Exception as e:
+            print(f"⚠️ Telethon disconnected! Retrying in 5s... Error: {e}")
+            await asyncio.sleep(5)
+
 # ===================== FLASK KEEP-ALIVE =====================
 app = Flask("keep_alive")
 
 @app.route("/")
-def home():
+def home_flask():
     return "Bot is running!"
 
 def run_flask():
-    port = int(os.environ.get("PORT", 10000))  # Render requires this
+    port = int(os.environ.get("PORT", 10000))
+    print(f"🚀 Keep-alive running on port {port}")
     app.run(host="0.0.0.0", port=port)
 
 # ===================== MAIN RUN =====================
 async def main():
-    if client:
-        await client.start()
-    print("🚀 Bot started...")
+    # Start Telethon in background task
+    telethon_task = asyncio.create_task(start_telethon())
+    # Start Aiogram bot polling
+    print("🚀 Aiogram Bot started...")
     await dp.start_polling(bot)
+    # Keep Telethon alive
+    await telethon_task
 
 if __name__ == "__main__":
-    # Start Flask in background thread for Render Web Service
-    Thread(target=run_flask).start()
+    # Start Flask for Render
+    Thread(target=run_flask, daemon=True).start()
     asyncio.run(main())
