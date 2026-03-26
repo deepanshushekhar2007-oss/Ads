@@ -1,29 +1,27 @@
 import os
 import re
 import asyncio
-from aiogram import Bot, Dispatcher, types
-from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.fsm.storage.memory import MemoryStorage
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from aiohttp import web
+from telethon.errors import UsernameNotOccupiedError, ChannelInvalidError
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.bot import DefaultBotProperties
+from aiogram.fsm.storage.memory import MemoryStorage
 
 # ================= ENV VARIABLES =================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_ID = int(os.getenv("API_ID", 0))
-API_HASH = os.getenv("API_HASH")
-SESSION_STRING = os.getenv("SESSION_STRING")
-PORT = int(os.getenv("PORT", 8000))  # Render automatically provides PORT
+BOT_TOKEN = os.getenv("BOT_TOKEN")          # Bot token for aiogram interface
+API_ID = int(os.getenv("API_ID", 0))        # Telethon API ID
+API_HASH = os.getenv("API_HASH")            # Telethon API HASH
+SESSION_STRING = os.getenv("SESSION_STRING")# Telethon userbot session string
 
 # ================= TELETHON CLIENT =================
-try:
-    client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-except Exception as e:
-    print("⚠️ Error initializing Telethon client:", e)
-    client = None
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 # ================= AIROGRAM BOT =================
-bot = Bot(token=BOT_TOKEN, session=AiohttpSession())
+default_props = DefaultBotProperties(parse_mode="HTML")
+bot = Bot(token=BOT_TOKEN, default=default_props, session=AiohttpSession())
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
@@ -36,20 +34,19 @@ def build_msg(title: str, data: dict):
     return msg
 
 # ================= START COMMAND =================
-@dp.message()
-async def start_cmd(message: types.Message):
-    if message.text and message.text.lower() == "/start":
-        await message.answer(
-            "<b>🚀 Ultimate Telegram ID Finder 🚀</b>\n\n"
-            "🔎 Detect Chat IDs, User IDs & Message IDs easily!\n\n"
-            "<b>Send anything:</b>\n"
-            "🔗 Group / Channel Link\n"
-            "📊 Message Link\n"
-            "📩 Forwarded Message\n"
-            "👤 Username\n\n"
-            "💡 Example:\nhttps://t.me/python/10\n\n"
-            "<i>Made by: @SPIDYWS</i>"
-        )
+@dp.message(Command("start"))
+async def start(message: types.Message):
+    await message.answer(
+        "<b>🚀 Ultimate Telegram ID Finder 🚀</b>\n\n"
+        "🔎 Detect Chat IDs, User IDs & Message IDs easily!\n\n"
+        "<b>Send anything:</b>\n"
+        "🔗 Group / Channel Link\n"
+        "📊 Message Link\n"
+        "📩 Forwarded Message\n"
+        "👤 Username\n\n"
+        "💡 Example:\nhttps://t.me/python/10\n\n"
+        "<i>Made by: @SPIDYWS</i>"
+    )
 
 # ================= MAIN HANDLER =================
 @dp.message()
@@ -59,42 +56,50 @@ async def finder(message: types.Message):
         # ---------- Forwarded Chat ----------
         if message.forward_from_chat:
             chat = message.forward_from_chat
-            await message.reply(build_msg("Forwarded Chat Found", {"Name": chat.title, "Chat ID": chat.id}))
+            await message.reply(build_msg("Forwarded Chat", {"Name": chat.title, "Chat ID": chat.id}))
             return
 
         # ---------- Forwarded User ----------
         if message.forward_from:
             user = message.forward_from
-            await message.reply(build_msg("Forwarded User Found", {"User ID": user.id, "Username": user.username or "N/A"}))
+            await message.reply(build_msg("Forwarded User", {"User ID": user.id, "Name": f"{user.first_name or ''} {user.last_name or ''}".strip()}))
             return
 
-        # ---------- Message Link ----------
+        # ---------- Message Link t.me/c/... ----------
         msg_link = re.search(r"t\.me\/c\/(\d+)\/(\d+)", text)
         if msg_link:
-            chat_id = int(f"-100{msg_link.group(1)}")
-            await message.reply(build_msg("Message Link Detected", {"Chat ID": chat_id}))
+            try:
+                chat_part = int(msg_link.group(1))
+                msg_id = int(msg_link.group(2))
+                chat_id = -1000000000000 + chat_part  # Convert to proper channel ID
+                msg_entity = await client.get_messages(chat_id, ids=msg_id)
+                await message.reply(build_msg("Message Link", {"Chat ID": chat_id, "Message ID": msg_id}))
+            except Exception as e:
+                await message.reply(f"❌ Unable to fetch message link\n<code>{e}</code>")
             return
 
-        # ---------- Public Link ----------
+        # ---------- Public Link t.me/username ----------
         public = re.search(r"t\.me\/([A-Za-z0-9_]+)", text)
-        if public and client:
+        if public:
             username = public.group(1)
             try:
-                chat = await client.get_entity(username)
-                chat_id = getattr(chat, "id", "N/A")
-                name = getattr(chat, "title", username)
-                await message.reply(build_msg("Chat Found", {"Name": name, "Chat ID": chat_id}))
-            except Exception:
-                await message.reply("❌ Unable to fetch chat ID")
+                entity = await client.get_entity(username)
+                name = getattr(entity, "title", getattr(entity, "first_name", username))
+                eid = getattr(entity, "id", "N/A")
+                await message.reply(build_msg("Public Chat/User Found", {"Name": name, "ID": eid}))
+            except (UsernameNotOccupiedError, ChannelInvalidError):
+                await message.reply("❌ Username / public link not found")
+            except Exception as e:
+                await message.reply(f"❌ Error fetching public link\n<code>{e}</code>")
             return
 
-        # ---------- Username ----------
-        if text.startswith("@") and client:
+        # ---------- Username @username ----------
+        if text.startswith("@"):
             try:
                 entity = await client.get_entity(text)
-                await message.reply(build_msg("User Found", {"User ID": entity.id, "Username": getattr(entity, 'username', 'N/A')}))
-            except Exception:
-                await message.reply("❌ User not found")
+                await message.reply(build_msg("User Found", {"User ID": entity.id, "Name": getattr(entity, "first_name", "")}))
+            except Exception as e:
+                await message.reply(f"❌ User not found\n<code>{e}</code>")
             return
 
         # ---------- No match ----------
@@ -102,24 +107,13 @@ async def finder(message: types.Message):
 
     except Exception as e:
         print("ERROR:", e)
-        await message.reply("❌ Something went wrong! Make sure the input is correct.")
+        await message.reply(f"❌ Something went wrong!\n<code>{e}</code>")
 
-# ================= WEBHOOK SERVER =================
-async def handle(request):
-    update = await request.json()
-    from aiogram.dispatcher.webhook import DispatcherWebhookHandler
-    await DispatcherWebhookHandler(dp, update)
-    return web.Response(text="OK")
-
-async def on_startup(app):
-    if client:
-        await client.start()
-        print("✅ Telethon client started")
-    print("🚀 Bot webhook ready...")
-
-app = web.Application()
-app.router.add_post(f"/bot{BOT_TOKEN}", handle)
-app.on_startup.append(on_startup)
+# ================= RUN BOT =================
+async def main():
+    await client.start()
+    print("🚀 Telethon client started")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    web.run_app(app, host="0.0.0.0", port=PORT)
+    asyncio.run(main())
