@@ -6,32 +6,19 @@ from aiogram.filters import Command
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from flask import Flask
-import threading
+from dotenv import load_dotenv
 
 # ================= ENV VARIABLES =================
+load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-PORT = int(os.getenv("PORT", 10000))  # Render default port
 
 # ================= INIT =================
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
 dp = Dispatcher()
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-
-# ================= FLASK HEALTH CHECK =================
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "🚀 Telegram ID Finder Bot is running!"
-
-def run_flask():
-    app.run(host="0.0.0.0", port=PORT)
-
-threading.Thread(target=run_flask).start()
 
 # ================= HELPER FUNCTION =================
 def build_msg(title: str, data: dict):
@@ -60,43 +47,25 @@ async def start(message: types.Message):
 @dp.message()
 async def finder(message: types.Message):
     text = (message.text or "").strip()
+
     try:
         # Forwarded Chat
         if message.forward_from_chat:
             chat = message.forward_from_chat
-            await message.reply(
-                f"<b>📩 Forwarded Chat Found</b>\n"
-                "━━━━━━━━━━━━━━━\n"
-                f"• <b>Name:</b> {chat.title}\n"
-                f"• <b>Chat ID:</b> <code>{chat.id}</code>\n"
-                "━━━━━━━━━━━━━━━\n"
-                "<i>Made by @SPIDYWS</i>"
-            )
+            await message.reply(build_msg("📩 Forwarded Chat Found", {"Name": chat.title, "Chat ID": chat.id}))
             return
 
         # Forwarded User
         if message.forward_from:
             user_id = message.forward_from.id
-            await message.reply(
-                f"<b>👤 Forwarded User Found</b>\n"
-                "━━━━━━━━━━━━━━━\n"
-                f"• <b>User ID:</b> <code>{user_id}</code>\n"
-                "━━━━━━━━━━━━━━━\n"
-                "<i>Made by @SPIDYWS</i>"
-            )
+            await message.reply(build_msg("👤 Forwarded User Found", {"User ID": user_id}))
             return
 
         # Message Link
         msg_link = re.search(r"t\.me\/c\/(\d+)\/(\d+)", text)
         if msg_link:
             chat_id = f"-100{msg_link.group(1)}"
-            await message.reply(
-                f"<b>📊 Message Link Detected</b>\n"
-                "━━━━━━━━━━━━━━━\n"
-                f"• <b>Chat ID:</b> <code>{chat_id}</code>\n"
-                "━━━━━━━━━━━━━━━\n"
-                "<i>Made by @SPIDYWS</i>"
-            )
+            await message.reply(build_msg("📊 Message Link Detected", {"Chat ID": chat_id}))
             return
 
         # Public Link
@@ -107,14 +76,7 @@ async def finder(message: types.Message):
                 chat = await client.get_entity(username)
                 chat_id = getattr(chat, "id", "N/A")
                 name = getattr(chat, "title", username)
-                await message.reply(
-                    f"<b>🔗 Chat Found</b>\n"
-                    "━━━━━━━━━━━━━━━\n"
-                    f"• <b>Name:</b> {name}\n"
-                    f"• <b>Chat ID:</b> <code>{chat_id}</code>\n"
-                    "━━━━━━━━━━━━━━━\n"
-                    "<i>Made by @SPIDYWS</i>"
-                )
+                await message.reply(build_msg("🔗 Chat Found", {"Name": name, "Chat ID": chat_id}))
             except:
                 await message.reply("❌ Unable to fetch chat ID")
             return
@@ -123,18 +85,14 @@ async def finder(message: types.Message):
         if text.startswith("@"):
             try:
                 entity = await client.get_entity(text)
-                await message.reply(
-                    f"<b>👤 User Found</b>\n"
-                    "━━━━━━━━━━━━━━━\n"
-                    f"• <b>User ID:</b> <code>{entity.id}</code>\n"
-                    "━━━━━━━━━━━━━━━\n"
-                    "<i>Made by @SPIDYWS</i>"
-                )
+                await message.reply(build_msg("👤 User Found", {"User ID": entity.id}))
             except:
                 await message.reply("❌ User not found")
             return
 
+        # No match
         await message.reply("❌ Unable to detect ID")
+
     except Exception as e:
         print("ERROR:", e)
         await message.reply("❌ Something went wrong! Make sure the input is correct.")
@@ -142,7 +100,7 @@ async def finder(message: types.Message):
 # ================= RUN BOT =================
 async def main():
     await client.start()
-    print("🚀 Telegram Bot started...")
+    print("🚀 Bot started...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
